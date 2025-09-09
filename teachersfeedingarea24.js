@@ -139,18 +139,38 @@ document.querySelectorAll('.form-buttons').forEach(button => {
                     recognition.lang = 'en-US';
                     
                     recognition.onresult = function(event) {
-                        const transcript = event.results[0][0].transcript.toLowerCase().trim();
-                        const processedValue = processSpeechInput(transcript);
-                        
-                        if (processedValue !== null) {
-                            document.getElementById('marks').value = processedValue;
-                            showSpeechFeedback(`Detected: ${processedValue}`, 'success');
-                        } else {
-                            showSpeechFeedback('Could not understand. Please try again.', 'error');
-                        }
-                        
+    const transcript = event.results[0][0].transcript.toLowerCase().trim();
+    const processedValue = processSpeechInput(transcript);
+    
+    if (processedValue !== null) {
+        document.getElementById('marks').value = processedValue;
+        showSpeechFeedback(`Detected: ${processedValue}`, 'success');
+        
+        // Auto-save and advance to next student after 2 seconds
+        setTimeout(() => {
+            // Simply trigger the existing save function
+            const saveButton = document.getElementById('saveMarksLocally');
+            if (saveButton) {
+                saveButton.click();
+                
+                
+                setTimeout(() => {
+                    if (currentStudentIndex < students.length - 1 && !isListening) {
+                        startListening();
+                    } else if (currentStudentIndex >= students.length - 1) {
+                        showSpeechFeedback('All students completed!', 'success');
                         stopListening();
-                    };
+                    }
+                }, 500);
+            }
+        }, 2000);
+        
+    } else {
+        showSpeechFeedback('Could not understand. Please try again.', 'error');
+    }
+    
+    // Don't stop listening here - let the timeout handle it
+};
                     
                     recognition.onerror = function(event) {
                         console.error('Speech recognition error:', event.error);
@@ -226,38 +246,39 @@ document.querySelectorAll('.form-buttons').forEach(button => {
                 return null;
             }
 
-            function startListening() {
-                if (recognition && !isListening) {
-                    isListening = true;
-                    updateMicButton(true);
-                    showSpeechFeedback('Listening... Speak now', 'listening');
-                    recognition.start();
-                }
-            }
+   function startListening() {
+    if (recognition && !isListening) {
+        isListening = true;
+        updateMicButton(true);
+        showSpeechFeedback('Listening... Speak now', 'listening');
+        recognition.start();
+    }
+}
 
-            function stopListening() {
-                if (recognition && isListening) {
-                    isListening = false;
-                    updateMicButton(false);
-                    recognition.stop();
-                }
-            }
+// Update the stopListening function to handle continuous mode
+function stopListening() {
+    if (recognition && isListening) {
+        isListening = false;
+        updateMicButton(false);
+        recognition.stop();
+    }
+}
 
-            function updateMicButton(listening) {
-                const micButton = document.getElementById('micButton');
-                if (micButton) {
-                    if (listening) {
-                        micButton.innerHTML = '🔴';
-                        micButton.style.background = 'linear-gradient(135deg, #ff4444 0%, #cc0000 100%)';
-                        micButton.title = 'Stop listening';
-                    } else {
-                        micButton.innerHTML = '🎤';
-                        micButton.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-                        micButton.title = 'Click to speak marks';
-                    }
-                }
-            }
-
+// Modify the updateMicButton function to show continuous mode status
+function updateMicButton(listening) {
+    const micButton = document.getElementById('micButton');
+    if (micButton) {
+        if (listening) {
+            micButton.innerHTML = '🔴';
+            micButton.style.background = 'linear-gradient(135deg, #ff4444 0%, #cc0000 100%)';
+            micButton.title = 'Continuous voice mode active - Click to stop';
+        } else {
+            micButton.innerHTML = '🎤';
+            micButton.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            micButton.title = 'Click to start continuous voice input';
+        }
+    }
+}
             function showSpeechFeedback(message, type) {
                 let feedbackElement = document.getElementById('speechFeedback');
                 if (!feedbackElement) {
@@ -294,56 +315,57 @@ document.querySelectorAll('.form-buttons').forEach(button => {
             }
 
             function createMicrophoneButton() {
-                const marksInput = document.getElementById('marks');
-                if (marksInput && recognition) {
-                    const inputContainer = marksInput.parentElement;
-                    
-                    let micButton = document.getElementById('micButton');
-                    if (!micButton) {
-                        micButton = document.createElement('button');
-                        micButton.id = 'micButton';
-                        micButton.type = 'button';
-                        micButton.innerHTML = '🎤';
-                        micButton.title = 'Click to speak marks';
-                        micButton.style.cssText = `
-                            margin-left: 10px;
-                            padding: 10px 15px;
-                            border: none;
-                            border-radius: 5px;
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                            color: white;
-                            cursor: pointer;
-                            font-size: 16px;
-                            transition: all 0.3s ease;
-                            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-                        `;
+    const marksInput = document.getElementById('marks');
+    if (marksInput && recognition) {
+        const inputContainer = marksInput.parentElement;
+        
+        let micButton = document.getElementById('micButton');
+        if (!micButton) {
+            micButton = document.createElement('button');
+            micButton.id = 'micButton';
+            micButton.type = 'button';
+            micButton.innerHTML = '🎤';
+            micButton.title = 'Click to start continuous voice input';
+            micButton.style.cssText = `
+                margin-left: 10px;
+                padding: 10px 15px;
+                border: none;
+                border-radius: 5px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                cursor: pointer;
+                font-size: 16px;
+                transition: all 0.3s ease;
+                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            `;
 
-                        micButton.addEventListener('click', function() {
-                            if (isListening) {
-                                stopListening();
-                            } else {
-                                startListening();
-                            }
-                        });
-
-                        micButton.addEventListener('mouseenter', function() {
-                            if (!isListening) {
-                                this.style.transform = 'translateY(-2px)';
-                                this.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.4)';
-                            }
-                        });
-
-                        micButton.addEventListener('mouseleave', function() {
-                            if (!isListening) {
-                                this.style.transform = 'translateY(0)';
-                                this.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.3)';
-                            }
-                        });
-
-                        inputContainer.appendChild(micButton);
-                    }
+            micButton.addEventListener('click', function() {
+                if (isListening) {
+                    stopListening();
+                    showSpeechFeedback('Voice input stopped', 'success');
+                } else {
+                    startListening();
                 }
-            }
+            });
+
+            micButton.addEventListener('mouseenter', function() {
+                if (!isListening) {
+                    this.style.transform = 'translateY(-2px)';
+                    this.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.4)';
+                }
+            });
+
+            micButton.addEventListener('mouseleave', function() {
+                if (!isListening) {
+                    this.style.transform = 'translateY(0)';
+                    this.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.3)';
+                }
+            });
+
+            inputContainer.appendChild(micButton);
+        }
+    }
+}
 
             window.onload = function() {
                 loadSavedData();
