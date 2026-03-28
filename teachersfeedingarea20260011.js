@@ -13,7 +13,7 @@
   var S = {
     digits:_DIGITS, schoolId:null, schoolName:'', meta:null, year:'',
     cls:'', examType:'', subject:'', teacher:null,
-    students:[], marks:{}, idx:0, submitted:false, allTeachers:[]
+    students:[], marks:{}, serverMarks:{}, idx:0, submitted:false, allTeachers:[]
   };
 
   /* BLOGGER KILL */
@@ -785,16 +785,49 @@
     var lb=g('axpLB'); lb.disabled=true;
     lb.innerHTML='<span style="display:inline-block;width:15px;height:15px;border:2px solid rgba(78,204,163,.2);border-top-color:#4ecca3;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Loading…';
     try{
-      var res=await apiGet({mode:'feedingRoster',schoolId:S.schoolId,year:S.year,examType:S.examType,'class':S.cls,subject:S.subject});
+      /* Always use examRoster — all candidates in the exam regardless of subject */
       var students=[];
-      if(res.status==='success'&&res.students&&res.students.length){students=res.students;}
-      else{
-        var er=await apiGet({mode:'examRoster',schoolId:S.schoolId,year:S.year,examType:S.examType,'class':S.cls});
-        if(er.status==='success'&&er.roster&&er.roster.length)students=er.roster;
-      }
-      if(!students.length){axpAlert('No Students','No students found for <strong>'+esc(S.subject)+'</strong> in <strong>'+esc(S.cls)+'</strong>.<br><br>Check registration sheet subject enrollment.','warning');return;}
+      var er=await apiGet({mode:'examRoster',schoolId:S.schoolId,year:S.year,examType:S.examType,'class':S.cls});
+      if(er.status==='success'&&er.roster&&er.roster.length)students=er.roster;
+      if(!students.length){axpAlert('No Students','No students found for <strong>'+esc(S.cls)+'</strong> · <strong>'+esc(S.examType)+'</strong>.<br><br>Check that students have been added to this exam.','warning');return;}
       students=sortStu(students);
-      S.students=students; S.marks={}; S.idx=0; S.submitted=false;
+      S.students=students; S.marks={}; S.serverMarks={}; S.idx=0; S.submitted=false;
+
+      /* Fetch existing marks from server for this exam sheet */
+      try{
+        var scoreRes=await apiGet({
+          schoolId:S.schoolId,year:S.year,
+          examType:S.examType,'class':S.cls
+        });
+        if(scoreRes.status==='success'&&scoreRes.data&&scoreRes.data.length){
+          var existingCount=0;
+          scoreRes.data.forEach(function(row){
+            if(row.scores&&row.scores[S.subject]!==undefined){
+              var sc=row.scores[S.subject].mark;
+              if(sc!==undefined&&sc!==null&&sc!==''){
+                S.serverMarks[row.name]=sc;
+                existingCount++;
+              }
+            }
+          });
+          if(existingCount>0){
+            /* Pre-fill marks from server so user sees existing data */
+            Object.keys(S.serverMarks).forEach(function(name){
+              S.marks[name]=S.serverMarks[name];
+            });
+            /* Alert user that marks already exist */
+            axpAlert(
+              'Existing Marks Found',
+              '<strong>'+existingCount+'</strong> mark(s) already exist on the server for <strong>'+esc(S.subject)+'</strong> · '+esc(S.cls)+' · '+esc(S.examType)+'.<br><br>'+
+              'These have been loaded for your review. Only marks you <strong>change</strong> will be updated on submit. Unchanged marks will not be touched.',
+              'warning'
+            );
+          }
+        }
+      }catch(ex){
+        /* Server mark fetch failed silently — not critical */
+        Logger&&Logger.log&&Logger.log('Server marks fetch failed: '+ex.message);
+      }
 
       /* Hide wizard, show entry */
       hideEl('axpWizard');
@@ -829,9 +862,34 @@
     var sc=S.marks[s.name];
     g('axpSI').value=(sc!==undefined)?sc:'';
     updateBadge(sc);
-    /* saved chip */
+    /* saved chip — show server mark context */
     var chip=g('axpStuSaved');
-    if(chip){if(sc!==undefined){chip.textContent='Saved: '+sc+' ('+calcGrade(sc).g+')';chip.className='stu-saved yes';}else{chip.textContent='Not entered yet';chip.className='stu-saved no';}}
+    if(chip){
+      var srvSc=(S.serverMarks||{})[s.name];
+      if(sc!==undefined){
+        if(srvSc!==undefined&&srvSc===sc){
+          chip.textContent='Server: '+sc+' ('+calcGrade(sc).g+') — unchanged';
+          chip.className='stu-saved yes'; chip.style.opacity='.7';
+        }else if(srvSc!==undefined&&srvSc!==sc){
+          chip.textContent='Changed: '+srvSc+' → '+sc+' ('+calcGrade(sc).g+')';
+          chip.className='stu-saved yes'; chip.style.opacity='1';
+          chip.style.background='rgba(245,158,11,.2)'; chip.style.borderColor='rgba(245,158,11,.5)'; chip.style.color='#8a6800';
+        }else{
+          chip.textContent='New: '+sc+' ('+calcGrade(sc).g+')';
+          chip.className='stu-saved yes'; chip.style.opacity='1';
+          chip.style.background=''; chip.style.borderColor=''; chip.style.color='';
+        }
+      }else if(srvSc!==undefined){
+        chip.textContent='Server: '+srvSc+' — cleared locally';
+        chip.className='stu-saved no'; chip.style.opacity='1';
+        chip.style.background='rgba(239,68,68,.1)'; chip.style.borderColor='rgba(239,68,68,.3)'; chip.style.color='var(--red)';
+      }else{
+        chip.textContent='Not entered yet';
+        chip.className='stu-saved no';
+        chip.style.background=''; chip.style.borderColor=''; chip.style.color='';
+        chip.style.opacity='1';
+      }
+    }
     /* missing count */
     var miss=S.students.filter(function(st){return S.marks[st.name]===undefined;}).length;
     var mb=g('axpMissingBadge'),mt=g('axpMissingTxt');
@@ -852,8 +910,17 @@
   /* ══════════════════════════════════════════════════════════════════════════ SCORE */
   window.axpOnScore=function(inp){
     var v=inp.value.trim();
-    if(!v){updateBadge(null);
-      var chip=g('axpStuSaved');if(chip){chip.textContent='Not entered yet';chip.className='stu-saved no';}
+    if(!v){
+      /* User cleared the input — remove mark completely */
+      var name=S.students[S.idx].name;
+      delete S.marks[name];
+      updateBadge(null);
+      saveCache();
+      var chip=g('axpStuSaved');if(chip){chip.textContent='Mark removed';chip.className='stu-saved no';}
+      var miss=S.students.filter(function(s){return S.marks[s.name]===undefined;}).length;
+      var mb=g('axpMissingBadge'),mt=g('axpMissingTxt');
+      if(mb&&mt){if(miss>0){mt.textContent=miss+' student'+(miss===1?'':'s')+' still need'+(miss===1?'s':'')+' a mark';mb.classList.remove('axpH');}else{mb.classList.add('axpH');}}
+      showPill('Mark removed for '+name,'warning');
       return;
     }
     var n=parseInt(v);
@@ -876,7 +943,9 @@
   };
   function saveCurrent(){
     var v=g('axpSI').value.trim();
-    if(v!==''){var n=parseInt(v);if(!isNaN(n)&&n>=0&&n<=100)S.marks[S.students[S.idx].name]=n;}
+    var name=S.students[S.idx].name;
+    if(v===''){delete S.marks[name];}
+    else{var n=parseInt(v);if(!isNaN(n)&&n>=0&&n<=100)S.marks[name]=n;}
   }
   window.axpNext=function(){
     var prevName=S.students[S.idx].name;
@@ -914,9 +983,23 @@
   /* ══════════════════════════════════════════════════════════════════════════ SUBMIT */
   window.axpSubmitAll=function(){
     saveCurrent();
-    var payload=S.students.filter(function(s){return S.marks[s.name]!==undefined;}).map(function(s){return{name:s.name,score:S.marks[s.name]};});
-    if(!payload.length){axpAlert('No Marks','Enter at least one score before submitting.','warning');return;}
-    axpConfirm('Confirm Submission','Submit <strong>'+payload.length+'</strong> mark(s) for<br><strong>'+esc(S.subject)+'</strong> · '+esc(S.cls)+' · '+esc(S.examType),
+    /* Only submit marks that changed from server values */
+    var server=S.serverMarks||{};
+    var allMarked=S.students.filter(function(s){return S.marks[s.name]!==undefined;});
+    var changed=allMarked.filter(function(s){
+      return S.marks[s.name]!==server[s.name]; /* undefined!=undefined is false so new entries included */
+    });
+    var payload=changed.map(function(s){return{name:s.name,score:S.marks[s.name]};});
+    if(!allMarked.length){axpAlert('No Marks','Enter at least one score before submitting.','warning');return;}
+    if(!payload.length){
+      axpAlert('No Changes','No marks have been changed from the server values. Nothing to submit.','info');
+      return;
+    }
+    var unchangedCount=allMarked.length-payload.length;
+    axpConfirm('Confirm Submission',
+      'Submitting <strong>'+payload.length+'</strong> changed mark(s) for<br>'+
+      '<strong>'+esc(S.subject)+'</strong> · '+esc(S.cls)+' · '+esc(S.examType)+
+      (unchangedCount>0?'<br><span style="font-size:11px;color:var(--muted)">'+unchangedCount+' unchanged mark(s) will not be touched.</span>':''),
     async function(){
       var btn=g('axpSubBtn'); btn.disabled=true;
       var spn='<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:7px"></span>';
@@ -925,7 +1008,10 @@
       try{
         var res=await apiPost({mode:'teacherMarksEntry',schoolId:S.schoolId,year:S.year,examType:S.examType,'class':S.cls,subject:S.subject,'data[studentName]':payload.map(function(p){return p.name;}).join(','),'data[marks]':payload.map(function(p){return String(p.score);}).join(',')});
         if(res.status==='success'){
-          S.submitted=true; clearCache();
+          S.submitted=true;
+          /* Update serverMarks to reflect what was just saved */
+          payload.forEach(function(p){S.serverMarks[p.name]=p.score;});
+          clearCache();
           var saved=res.saved!==undefined?res.saved:payload.length;
           var unsaved=S.students.length-saved;
           g('axpSucSub').innerHTML='<strong style="color:var(--gold2);font-size:28px">'+saved+'</strong> marks saved<br>'+esc(S.subject)+' · '+esc(S.cls)+' · '+esc(S.examType)+(unsaved>0?'<br><span style="font-size:11px;opacity:.6">'+unsaved+' student(s) had no mark entered</span>':'');
@@ -971,17 +1057,21 @@
     doc.setFontSize(7.5);doc.setTextColor(120,120,120);
     doc.text('Code: S'+S.digits+' · '+new Date().toLocaleDateString(),PW/2,y+22,{align:'center'});
     y+=30;
-    if(S.teacher){doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(100,100,100);doc.text('Teacher: '+S.teacher.name+(S.teacher.email?' <'+S.teacher.email+'>':''),ML,y);y+=7;}
+    if(S.teacher){doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(0,0,0);doc.text('Teacher: '+S.teacher.name+(S.teacher.email?' <'+S.teacher.email+'>':''),ML,y);y+=7;}
     var cols=[{l:'CAND. NO.',w:30},{l:'STUDENT NAME',w:68},{l:'SEX',w:12},{l:'SCORE',w:18},{l:'GRADE',w:16},{l:'POS.',w:24}],RH=7;
     var ranked2=S.students.filter(function(s){return S.marks[s.name]!==undefined;}).slice().sort(function(a,b){return S.marks[b.name]-S.marks[a.name];});
     var pm2={},p2=0,ls2=null,lp2=0;
     ranked2.forEach(function(s){var sc=S.marks[s.name];if(sc!==ls2){p2=lp2+1;ls2=sc;lp2=p2;}pm2[s.name]=p2;});
     var grC={A:[16,185,129],B:[4,120,87],C:[180,130,6],D:[194,65,12],F:[185,28,28]};
     function drawHdr(){
-      doc.setFillColor(6,12,28);doc.rect(ML,y,UW,RH,'F');
-      doc.setDrawColor(0,0,0);doc.setLineWidth(0.2);doc.rect(ML,y,UW,RH,'S');
+      doc.setDrawColor(0,0,0);doc.setLineWidth(0.3);doc.rect(ML,y,UW,RH,'S');
       var cx=ML;
-      cols.forEach(function(c){doc.setFont('helvetica','bold');doc.setFontSize(7.5);doc.setTextColor(78,204,163);doc.line(cx+c.w,y,cx+c.w,y+RH);doc.text(c.l,cx+c.w/2,y+RH/2+2.5,{align:'center',maxWidth:c.w-2});cx+=c.w;});
+      cols.forEach(function(c){
+        doc.setFont('helvetica','bold');doc.setFontSize(7.5);doc.setTextColor(0,0,0);
+        doc.line(cx+c.w,y,cx+c.w,y+RH);
+        doc.text(c.l,cx+c.w/2,y+RH/2+2.5,{align:'center',maxWidth:c.w-2});
+        cx+=c.w;
+      });
       y+=RH;
     }
     drawHdr();
@@ -990,12 +1080,14 @@
       if(S.marks[s.name]===undefined)return;
       chkPg(RH+2);
       var sc=S.marks[s.name],gr=calcGrade(sc),gc3=grC[gr.g]||[30,30,30];
-      if(rc%2===1){doc.setFillColor(15,20,36);doc.rect(ML,y,UW,RH,'F');}
       doc.setDrawColor(0,0,0);doc.setLineWidth(0.2);doc.rect(ML,y,UW,RH,'S');
       var row=[candNo(i),s.name,s.gender==='F'?'F':'M',sc,gr.g,pm2[s.name]||'—'],cx=ML;
       row.forEach(function(v,ci){
-        if(ci===4){doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setTextColor(gc3[0],gc3[1],gc3[2]);}
-        else{doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(180,180,180);}
+        /* All text black — bold for grade column */
+        if(ci===4){doc.setFont('helvetica','bold');doc.setFontSize(8);}
+        else if(ci===3){doc.setFont('helvetica','bold');doc.setFontSize(8);}
+        else{doc.setFont('helvetica','normal');doc.setFontSize(7.5);}
+        doc.setTextColor(0,0,0);
         doc.line(cx+cols[ci].w,y,cx+cols[ci].w,y+RH);
         var al=ci===1?'left':'center',tx=ci===1?cx+2:cx+cols[ci].w/2;
         doc.text(String(v||''),tx,y+RH/2+2.5,{align:al,maxWidth:cols[ci].w-3});cx+=cols[ci].w;
@@ -1003,7 +1095,7 @@
       y+=RH;rc++;
     });
     var nP=doc.internal.getNumberOfPages();
-    for(var pg=1;pg<=nP;pg++){doc.setPage(pg);doc.setFont('helvetica','italic');doc.setFontSize(7);doc.setTextColor(80,80,80);doc.text('AcademixPoint School Management · www.academixpoint.com',PW/2,PH-8,{align:'center'});doc.text('Page '+pg+' of '+nP,PW-MR,PH-8,{align:'right'});}
+    for(var pg=1;pg<=nP;pg++){doc.setPage(pg);doc.setFont('helvetica','italic');doc.setFontSize(7);doc.setTextColor(0,0,0);doc.text('AcademixPoint School Management · www.academixpoint.com',PW/2,PH-8,{align:'center'});doc.text('Page '+pg+' of '+nP,PW-MR,PH-8,{align:'right'});}
     doc.save('MarkSheet_S'+S.digits+'_'+S.cls+'_'+S.subject+'_'+S.examType+'.pdf');
   };
 
@@ -1020,7 +1112,7 @@
   window.axpReenter=function(){hideEl('axpDone');showEl('axpEntry');S.idx=0;renderCard();};
 
   window.axpStartNew=function(){
-    S.cls='';S.examType='';S.subject='';S.teacher=null;S.students=[];S.marks={};S.submitted=false;
+    S.cls='';S.examType='';S.subject='';S.teacher=null;S.students=[];S.marks={};S.serverMarks={};S.submitted=false;
     hideEl('axpDone');hideEl('axpEntry');hideEl('axpSubmittedView');
     showEl('axpWizard');hideEl('axpS2');hideEl('axpS3');hideEl('axpLW');
     ['axpS1','axpS2','axpS3'].forEach(function(id,i){var card=g(id);if(!card)return;var n=card.querySelector('.ct-num');if(n)n.innerHTML=String(i+1);});
@@ -1028,34 +1120,77 @@
   };
 
   /* ══════════════════════════════════════════════════════════════════════════ CACHE — FIX: save marks + students */
-  function cKey(){return 'axpT_'+S.digits+'_'+(S.schoolId||'');}
+  /* Per-subject key so multiple subjects saved independently */
+  function cKey(cls,exam,sub){
+    var c=cls||S.cls, e=exam||S.examType, s=sub||S.subject;
+    return 'axpT_'+S.digits+'_'+c+'_'+e+'_'+s;
+  }
+  function cKeyAll(){/* list all session keys for this school */
+    try{
+      var prefix='axpT_'+S.digits+'_';
+      return Object.keys(localStorage).filter(function(k){return k.indexOf(prefix)===0;});
+    }catch(ex){return [];}
+  }
   function saveCache(){
     try{
       localStorage.setItem(cKey(),JSON.stringify({
         cls:S.cls,examType:S.examType,subject:S.subject,teacher:S.teacher,
-        marks:S.marks,       /* ← marks persisted */
+        marks:S.marks,
         idx:S.idx,
-        students:S.students, /* ← students persisted so restore needs no server call */
+        students:S.students,
+        serverMarks:S.serverMarks||{},
         savedAt:new Date().toISOString()
       }));
     }catch(ex){}
   }
   function clearCache(){try{localStorage.removeItem(cKey());}catch(ex){}}
+  function clearAllSessions(){try{cKeyAll().forEach(function(k){localStorage.removeItem(k);});}catch(ex){}}
 
   function checkRestore(){
     try{
-      var raw=localStorage.getItem(cKey());if(!raw)return;
-      var d=JSON.parse(raw);
-      if(!d.cls||!d.examType||!d.subject)return;
-      var filled=Object.keys(d.marks||{}).length;
-      g('axpRI').textContent=d.cls+' · '+d.examType+' · '+d.subject+' — '+filled+' mark(s) saved · '+new Date(d.savedAt).toLocaleString();
-      g('axpRB').style.display='block';
-      window._axpPR=d;
+      var keys=cKeyAll();
+      if(!keys.length)return;
+      /* Build list of saved sessions */
+      var sessions=[];
+      keys.forEach(function(k){
+        try{
+          var d=JSON.parse(localStorage.getItem(k));
+          if(d&&d.cls&&d.examType&&d.subject){
+            sessions.push({key:k,data:d,filled:Object.keys(d.marks||{}).length});
+          }
+        }catch(ex){}
+      });
+      if(!sessions.length)return;
+      /* Render session list */
+      var rb=g('axpRB'),ri=g('axpRI');
+      if(!rb||!ri)return;
+      ri.innerHTML=sessions.map(function(s,i){
+        return '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">'+
+          '<span style="font-size:11px;font-weight:700;color:#92400e">'+esc(s.data.cls)+' · '+esc(s.data.examType)+' · '+esc(s.data.subject)+
+          ' <span style="color:#a16207">('+s.filled+' marks)</span></span>'+
+          '<button onclick="axpRestoreSession('+i+')" style="font-size:10px;padding:2px 8px;background:var(--pri);color:#fff;border:none;cursor:pointer;font-weight:700">Resume</button>'+
+          '<button onclick="axpDeleteSession('+i+')" style="font-size:10px;padding:2px 8px;background:#ef4444;color:#fff;border:none;cursor:pointer;font-weight:700">Delete</button>'+
+        '</div>';
+      }).join('');
+      rb.style.display='block';
+      window._axpSessions=sessions;
     }catch(ex){}
   }
 
-  window.axpRestoreSession=async function(){
-    var d=window._axpPR;if(!d)return;
+  window.axpDeleteSession=function(idx){
+    var sessions=window._axpSessions||[];
+    if(!sessions[idx])return;
+    try{localStorage.removeItem(sessions[idx].key);}catch(ex){}
+    sessions.splice(idx,1);
+    window._axpSessions=sessions;
+    if(!sessions.length){g('axpRB').style.display='none';}
+    else{checkRestore();}
+    showPill('Session deleted','warning');
+  };
+  window.axpRestoreSession=async function(idx){
+    var sessions=window._axpSessions||[];
+    var d=(idx!==undefined&&sessions[idx])?sessions[idx].data:window._axpPR;
+    if(!d)return;
     g('axpRB').style.display='none';
     S.cls=d.cls;S.examType=d.examType;S.subject=d.subject;S.teacher=d.teacher||null;
     S.marks=d.marks||{};S.idx=d.idx||0;
